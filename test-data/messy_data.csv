@@ -1,0 +1,21 @@
+name,age,email,city,signup_date,salary
+John Smith,25,john@example.com,Adelaide,2024-01-15,55000
+JOHN SMITH,25,john@example.com,adelaide,15/01/2024,55000
+Sarah Connor,32,sarah@example.com,Sydney,2024-02-20,72000
+Mike Johnson,,mike@example.com,Melbourne,2024-03-10,
+Lisa Wong,28,lisa@example.com,,2024-04-05,61000
+,45,unknown@example.com,Perth,2024-05-12,58000
+James Brown,29,james@example.com,Brisbane,2024-06-18,65000
+Sarah Connor,32,sarah@example.com,Sydney,2024-02-20,72000
+Tom Wilson,-5,tom@example.com,Adelaide,2024-07-22,49000
+Emma Davis,27,emma@example.com,Melbourne,not_a_date,53000
+Alex Turner,31,not_an_email,Sydney,2024-08-30,67000
+Katie Bell,26,katie@example.com,Adelaide,2024-09-14,999999
+john smith,25,john@example.com,ADELAIDE,2024-01-15,55000
+Oliver Grant,33,oliver@example.com,Melbourne,2024-10-01,71000
+Mia Chen,24,mia@example.com,Sydney,2024-11-11,48000
+Noah Lee,TWENTY,noah@example.com,Brisbane,2024-12-25,52000
+Zara Khan,30,zara@example.com,Perth,2025-01-08,63000
+Liam Scott,28,liam@example.com,Adelaide,2024-13-45,57000
+Ella Moore,35,ella@example.com,Sydney,2025-02-14,
+Ruby Adams,22,ruby@example.com,Melbourne,2025-03-01,44000

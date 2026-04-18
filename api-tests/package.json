@@ -1,0 +1,14 @@
+{
+  "name": "api-tests",
+  "version": "1.0.0",
+  "description": "API / network-level tests for Rhombus AI",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:debug": "npx playwright test --debug"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.4.7"
+  }
+}

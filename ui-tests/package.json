@@ -1,15 +1,16 @@
 {
   "name": "ui-tests",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {},
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "description": "Playwright UI tests for Rhombus AI",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:debug": "npx playwright test --debug",
+    "test:ui": "npx playwright test --ui"
+  },
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
-    "@types/node": "^25.6.0"
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.4.7"
   }
 }
