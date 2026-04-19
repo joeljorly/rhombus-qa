@@ -1,0 +1,19 @@
+name,age,email,city,signup_date,salary
+john smith,25,john@example.com,adelaide,2024-01-15,55000.0
+john smith,25,john@example.com,adelaide,,55000.0
+sarah connor,32,sarah@example.com,sydney,2024-02-20,72000.0
+mike johnson,none,mike@example.com,melbourne,2024-03-10,
+lisa wong,28,lisa@example.com,none,2024-04-05,61000.0
+none,45,unknown@example.com,perth,2024-05-12,58000.0
+james brown,29,james@example.com,brisbane,2024-06-18,65000.0
+tom wilson,-5,tom@example.com,adelaide,2024-07-22,49000.0
+emma davis,27,emma@example.com,melbourne,,53000.0
+alex turner,31,not_an_email,sydney,2024-08-30,67000.0
+katie bell,26,katie@example.com,adelaide,2024-09-14,999999.0
+oliver grant,33,oliver@example.com,melbourne,2024-10-01,71000.0
+mia chen,24,mia@example.com,sydney,2024-11-11,48000.0
+noah lee,twenty,noah@example.com,brisbane,2024-12-25,52000.0
+zara khan,30,zara@example.com,perth,2025-01-08,63000.0
+liam scott,28,liam@example.com,adelaide,,57000.0
+ella moore,35,ella@example.com,sydney,2025-02-14,
+ruby adams,22,ruby@example.com,melbourne,2025-03-01,44000.0

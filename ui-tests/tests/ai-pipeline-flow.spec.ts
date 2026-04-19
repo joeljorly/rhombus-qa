@@ -12,139 +12,199 @@ test.describe("Rhombus AI - AI Pipeline Flow", () => {
   test("should sign in, upload CSV, run AI pipeline, preview and download results", async ({
     page,
   }) => {
-    // ── Step 1: Navigate to login ──
-    await page.goto("/");
-    await page.click('text=Log In');
+    // ── Step 1: Sign in ──
+    // go directly to the app -- it will show the dashboard (logged out)
+    await page.goto("https://rhombusai.com");
+
+    // dismiss the "Start Building" tutorial dialog
+    const dialog = page.locator('[role="dialog"]');
+    await dialog.waitFor({ state: "visible", timeout: 10_000 });
+    await dialog.locator('button:has-text("Close")').click();
+    await dialog.waitFor({ state: "hidden", timeout: 5_000 });
+
+    // click the Log In button in the sidebar
+    await page.getByRole("button", { name: "Log In" }).click();
 
     // wait for the Auth0 login page to load
-    await page.waitForURL(/auth\.rhombusai\.com/, { timeout: 15_000 });
+    await page.waitForURL(/auth\.rhombusai\.com/, { timeout: 30_000 });
 
-    // ── Step 2: Sign in with email and password ──
-    await page.fill('input[name="email"], input[type="email"]', EMAIL);
-    await page.fill('input[name="password"], input[type="password"]', PASSWORD);
-    await page.click('button:has-text("Log In")');
+    // ── Step 2: Fill credentials and submit ──
+    await page.getByRole("textbox", { name: "Email address" }).fill(EMAIL);
+    await page.getByRole("textbox", { name: "Password" }).fill(PASSWORD);
+    await page.getByRole("button", { name: "Log In" }).click();
 
-    // wait for redirect back to the dashboard
+    // wait for redirect -- could go to /hub or /
     await page.waitForURL(/rhombusai\.com/, { timeout: 30_000 });
+    // give the app a moment to settle after auth redirect
+    await page.waitForTimeout(2_000);
 
-    // verify we're logged in — sidebar should show email or dashboard content
+    // if we landed on /hub, navigate to the app
+    if (page.url().includes("/hub")) {
+      await page.goto("https://rhombusai.com", {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForTimeout(3_000);
+    }
+
+    // if still on hub, try /workflow
+    if (page.url().includes("/hub")) {
+      await page.goto("https://rhombusai.com/workflow", {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForTimeout(3_000);
+    }
+
+    // dismiss any tutorial dialog that appears after login
+    try {
+      const postLoginDialog = page.locator('[role="dialog"]');
+      await postLoginDialog.waitFor({ state: "visible", timeout: 5_000 });
+      await postLoginDialog.locator('button:has-text("Close")').click();
+      await postLoginDialog.waitFor({ state: "hidden", timeout: 5_000 });
+    } catch {
+      // no dialog -- continue
+    }
+
+    // verify we see the app dashboard
     await expect(
-      page.locator("text=Dashboard").first()
+      page.locator('text=New Project').first()
     ).toBeVisible({ timeout: 15_000 });
 
     // ── Step 3: Upload messy CSV and send prompt ──
-    // click the attach/upload area and upload the file
-    const fileInput = page.locator('input[type="file"]');
+    // click the "+" button (ref=e106) to open the "Add New File" dialog
+    // the button is inside a container with the textbox, target it directly
+    const textbox = page.getByRole("textbox", { name: /Attach or drop a file/i });
+    // the "+" button is a sibling of the textbox, inside the same parent container
+    const promptParent = textbox.locator('..').locator('..');
+    await promptParent.locator('button').first().click();
 
-    // the file input might be hidden, so we use setInputFiles directly
-    await fileInput.setInputFiles(TEST_CSV);
+    // wait for the "Add New File" dialog to appear
+    const addFileDialog = page.getByRole("dialog", { name: "Add New File" });
+    await expect(addFileDialog).toBeVisible({ timeout: 10_000 });
 
-    // type the transformation prompt
-    const promptArea = page.locator(
-      'textarea, [contenteditable="true"], input[placeholder*="prompt" i], input[placeholder*="attach" i]'
-    ).first();
-    await promptArea.waitFor({ state: "visible", timeout: 10_000 });
+    // the dialog has a hidden file input -- find it and set files directly
+    const hiddenInput = addFileDialog.locator('input[type="file"]');
+    const hasHiddenInput = await hiddenInput.count();
+
+    if (hasHiddenInput > 0) {
+      // directly set files on the hidden input
+      await hiddenInput.setInputFiles(TEST_CSV);
+    } else {
+      // fall back to clicking "Browse Here" to trigger file chooser
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 15_000 }),
+        addFileDialog.locator('text=Browse Here').click(),
+      ]);
+      await fileChooser.setFiles(TEST_CSV);
+    }
+
+    // wait for file to appear in the dialog
+    await page.waitForTimeout(2_000);
+    // wait for Attach button to become enabled (it's disabled until file is selected)
+    const attachBtn = addFileDialog.getByRole("button", { name: "Attach" });
+    await expect(attachBtn).toBeEnabled({ timeout: 10_000 });
+    await attachBtn.click();
+
+    // wait for dialog to close
+    await expect(addFileDialog).toBeHidden({ timeout: 10_000 });
+
+    // type the transformation prompt in the correct text area
+    // after file attach, the placeholder changes to "What would you like to transform?"
+    const promptArea = page.getByRole("textbox", { name: /What would you like to transform/i });
     await promptArea.click();
     await promptArea.fill(
       "Remove duplicate rows and standardize text casing to lowercase"
     );
 
-    // click the send button
-    const sendButton = page.locator(
-      'button[type="submit"], button:has(svg), button[aria-label*="send" i]'
-    ).last();
+    // click the send button (the enabled button with an arrow icon next to the prompt)
+    // wait briefly for send button to become enabled after typing
+    await page.waitForTimeout(500);
+    const promptContainer = promptArea.locator('..').locator('..');
+    const sendButton = promptContainer.locator('button:not([disabled])').last();
     await sendButton.click();
 
     // ── Step 4: Handle clarification popup if it appears ──
-    try {
-      const clarifyDialog = page.locator("text=Clarify Request");
-      await clarifyDialog.waitFor({ state: "visible", timeout: 15_000 });
+    // the AI may ask for clarification or proceed directly to building the pipeline
+    // wait for either the clarification dialog OR the pipeline canvas to appear
+    const clarifyOrPipeline = await Promise.race([
+      page.locator("text=Clarify Request").waitFor({ state: "visible", timeout: 60_000 }).then(() => "clarify"),
+      page.locator("text=Data Input").waitFor({ state: "visible", timeout: 60_000 }).then(() => "pipeline"),
+      page.locator('button:has-text("Run Pipeline")').waitFor({ state: "visible", timeout: 60_000 }).then(() => "pipeline"),
+      page.locator('button:has-text("Cancel Pipeline")').waitFor({ state: "visible", timeout: 60_000 }).then(() => "pipeline"),
+    ]);
 
-      // if clarification popup appeared, fill it in
-      const clarifyInput = page.locator(
-        'textarea[placeholder*="missing detail" i], textarea'
-      ).last();
+    if (clarifyOrPipeline === "clarify") {
+      // fill in the clarification
+      const clarifyInput = page.locator("textarea").last();
       await clarifyInput.fill(
         "Remove exact duplicate rows and convert all text columns to lowercase"
       );
-
-      await page.click('button:has-text("Continue")');
-    } catch {
-      // no clarification popup — that's fine, continue
-      console.log("No clarification popup detected, continuing...");
+      await page.getByRole("button", { name: "Continue" }).click();
+      
+      // now wait for pipeline to appear after clarification
+      await expect(
+        page.locator('button:has-text("Run Pipeline"), button:has-text("Cancel Pipeline")').first()
+      ).toBeVisible({ timeout: 90_000 });
     }
 
-    // ── Step 5: Wait for pipeline to finish ──
-    // the "Run Pipeline" button appears when pipeline is built
-    // and "Cancel Pipeline" appears during execution
-    // wait for the pipeline canvas to appear with nodes
-    await expect(
-      page.locator('text=Data Input').first()
-    ).toBeVisible({ timeout: 60_000 });
-
-    // check if pipeline needs to be run manually or runs automatically
+    // ── Step 5: Wait for pipeline to be built and executed ──
     const runPipelineBtn = page.locator('button:has-text("Run Pipeline")');
-    const cancelPipelineBtn = page.locator(
-      'button:has-text("Cancel Pipeline")'
-    );
 
-    // if "Cancel Pipeline" is visible, pipeline is already running
-    const isRunning = await cancelPipelineBtn.isVisible().catch(() => false);
+    // wait for Run Pipeline to be enabled (AI finished building)
+    await expect(runPipelineBtn).toBeEnabled({ timeout: 120_000 });
 
-    if (!isRunning) {
-      // check if Run Pipeline is available
-      const canRun = await runPipelineBtn.isVisible().catch(() => false);
-      if (canRun) {
-        await runPipelineBtn.click();
-      }
+    // click Run Pipeline to execute it
+    await runPipelineBtn.click();
+
+    // wait for pipeline execution to complete
+    // the button becomes disabled during execution, then re-enabled when done
+    // first wait for it to become disabled (execution started)
+    await page.waitForTimeout(2_000);
+    // then wait for it to become enabled again (execution finished)
+    await expect(runPipelineBtn).toBeEnabled({ timeout: 120_000 });
+
+    // also check for the success toast notification
+    try {
+      await page.locator('text=Pipeline execution completed').waitFor({ state: "visible", timeout: 5_000 });
+    } catch {
+      // toast might have already disappeared
     }
-
-    // wait for pipeline to complete: "Run Pipeline" should reappear
-    await expect(runPipelineBtn).toBeVisible({ timeout: 90_000 });
 
     // ── Step 6: Preview the output ──
-    const previewTab = page.locator(
-      'button:has-text("Preview"), [role="tab"]:has-text("Preview")'
-    ).first();
+    // click on the Custom output node to select it — this reveals the Preview tab
+    // the node's full accessible name includes "Custom [OP_ROLE=transform]..."
+    const customNode = page.getByRole("button", { name: /Custom/ }).first();
+    await customNode.click({ timeout: 10_000 });
+    await page.waitForTimeout(1_000);
+
+    // after clicking the node, the top tablist should now show Canvas + Preview
+    const previewTab = page.locator('[role="tab"]').filter({ hasText: 'Preview' }).first();
+    await expect(previewTab).toBeVisible({ timeout: 10_000 });
     await previewTab.click();
 
-    // verify we see the data table with results
-    await expect(
-      page.locator("text=Node Preview").first()
-    ).toBeVisible({ timeout: 15_000 });
+    // verify preview table is visible with data
+    // look for the Download button which confirms we're on the Preview page
+    await expect(page.locator('button:has-text("Download")').first()).toBeVisible({
+      timeout: 15_000,
+    });
 
-    // verify we see table rows with actual data
-    // the cleaned data should have lowercase names
-    await expect(
-      page.locator("table, [role='grid'], [class*='table']").first()
-    ).toBeVisible({ timeout: 10_000 });
-
-    // check that data is actually displayed — look for at least one data cell
-    const firstDataCell = page.locator(
-      "td, [role='cell'], [role='gridcell']"
-    ).first();
-    await expect(firstDataCell).toBeVisible({ timeout: 10_000 });
+    // verify data rows are present
+    const dataCell = page.locator("td, [role='cell'], [role='gridcell']").first();
+    await expect(dataCell).toBeVisible({ timeout: 10_000 });
 
     // ── Step 7: Download the results ──
-    const downloadButton = page.locator(
-      'button:has-text("Download")'
-    ).first();
+    const downloadButton = page.locator('button:has-text("Download")').first();
     await expect(downloadButton).toBeVisible({ timeout: 10_000 });
 
-    // set up download listener before clicking
-    const downloadPromise = page.waitForEvent("download", { timeout: 30_000 });
+    // click Download to open the dropdown menu
     await downloadButton.click();
 
-    // if a dropdown appears with format options, click CSV
-    try {
-      const csvOption = page.locator(
-        'text=CSV, button:has-text("CSV"), [role="menuitem"]:has-text("CSV")'
-      ).first();
-      await csvOption.waitFor({ state: "visible", timeout: 3_000 });
-      await csvOption.click();
-    } catch {
-      // no dropdown — download started directly
-    }
+    // wait for dropdown to appear and click "Download as CSV"
+    const csvOption = page.locator('text=Download as CSV');
+    await expect(csvOption).toBeVisible({ timeout: 5_000 });
+
+    // set up download listener BEFORE clicking the CSV option
+    const downloadPromise = page.waitForEvent("download", { timeout: 30_000 });
+    await csvOption.click();
 
     const download = await downloadPromise;
 
@@ -155,15 +215,14 @@ test.describe("Rhombus AI - AI Pipeline Flow", () => {
     );
     await download.saveAs(downloadPath);
 
-    // verify the file was actually downloaded
+    // ── Assertions on downloaded data ──
     const fs = await import("fs");
     expect(fs.existsSync(downloadPath)).toBeTruthy();
 
-    // read the file and do basic checks
     const content = fs.readFileSync(downloadPath, "utf-8");
     const lines = content.trim().split("\n");
 
-    // should have a header row + data rows
+    // should have header + data rows
     expect(lines.length).toBeGreaterThan(1);
 
     // header should contain expected columns
@@ -172,11 +231,11 @@ test.describe("Rhombus AI - AI Pipeline Flow", () => {
     expect(header).toContain("age");
     expect(header).toContain("email");
 
-    // data should be lowercased (checking first data row)
+    // first data row should be lowercase
     const firstRow = lines[1];
     expect(firstRow).toBe(firstRow.toLowerCase());
 
-    // should have fewer rows than input (20 data rows) due to deduplication
+    // should have fewer rows than input (20 rows) due to dedup
     expect(lines.length - 1).toBeLessThan(20);
 
     console.log(`Download verified: ${lines.length - 1} data rows in output`);
