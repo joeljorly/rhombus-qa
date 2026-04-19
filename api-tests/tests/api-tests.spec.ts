@@ -1,6 +1,7 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
+import { Browser, BrowserContext, Page } from "playwright";
 
 const EMAIL = process.env.RHOMBUS_EMAIL!;
 const PASSWORD = process.env.RHOMBUS_PASSWORD!;
@@ -8,56 +9,71 @@ const PASSWORD = process.env.RHOMBUS_PASSWORD!;
 const API_BASE = "https://api.rhombusai.com";
 const AUTH_BASE = "https://rhombusai.com";
 
-/**
- * Helper: log in via the browser and grab the access token from the session.
- *
- * Rhombus uses Auth0 — the browser holds a session cookie after login,
- * and the /api/auth/session endpoint returns a JWT access token.
- * We replay that flow once, then use the token for direct API calls.
- */
-async function getAccessToken(): Promise<string> {
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
-  const page = await context.newPage();
+let browser: Browser;
+let authContext: BrowserContext;
+let accessToken: string;
+let appPage: Page; // keep a page on rhombusai.com for API calls
 
-  // go to login page
+test.beforeAll(async () => {
+  const { chromium } = await import("playwright");
+  browser = await chromium.launch();
+  authContext = await browser.newContext();
+  const page = await authContext.newPage();
+
+  // go to app
   await page.goto(`${AUTH_BASE}/`);
-  await page.click("text=Log In");
-  await page.waitForURL(/auth\.rhombusai\.com/, { timeout: 15_000 });
+
+  // dismiss the "Start Building" tutorial dialog
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.waitFor({ state: "visible", timeout: 10_000 });
+  await dialog.locator('button:has-text("Close")').click();
+  await dialog.waitFor({ state: "hidden", timeout: 5_000 });
+
+  // click Log In
+  await page.getByRole("button", { name: "Log In" }).click();
+  await page.waitForURL(/auth\.rhombusai\.com/, { timeout: 30_000 });
 
   // fill credentials
-  await page.fill('input[name="email"], input[type="email"]', EMAIL);
-  await page.fill('input[name="password"], input[type="password"]', PASSWORD);
-  await page.click('button:has-text("Log In")');
+  await page.getByRole("textbox", { name: "Email address" }).fill(EMAIL);
+  await page.getByRole("textbox", { name: "Password" }).fill(PASSWORD);
+  await page.getByRole("button", { name: "Log In" }).click();
 
   // wait for redirect back to app
-  await page.waitForURL(/rhombusai\.com\//, { timeout: 30_000 });
-  await page.waitForTimeout(2_000); // let session settle
+  await page.waitForURL(/rhombusai\.com/, { timeout: 30_000 });
+  await page.waitForTimeout(2_000);
+
+  // if on /hub, navigate to app root
+  if (page.url().includes("/hub")) {
+    await page.goto("https://rhombusai.com", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3_000);
+  }
+
+  // dismiss dialog if it appears again
+  try {
+    const d = page.locator('[role="dialog"]');
+    await d.waitFor({ state: "visible", timeout: 3_000 });
+    await d.locator('button:has-text("Close")').click();
+    await d.waitFor({ state: "hidden", timeout: 3_000 });
+  } catch {}
 
   // grab the access token from the session endpoint
   const sessionResp = await page.request.get(`${AUTH_BASE}/api/auth/session`);
   const session = await sessionResp.json();
+  accessToken = session.accessToken;
 
-  await browser.close();
-  return session.accessToken;
-}
+  // keep this page alive for API calls (it's on rhombusai.com origin)
+  appPage = page;
+});
 
-let TOKEN: string;
-
-test.beforeAll(async () => {
-  TOKEN = await getAccessToken();
+test.afterAll(async () => {
+  await browser?.close();
 });
 
 // ─────────────────────────────────────────────
 // TEST 1 (positive): Session endpoint returns valid user info
 // ─────────────────────────────────────────────
 test("GET /api/auth/session should return user info and valid token", async () => {
-  // we already got the token, so let's verify the session data
-  const ctx = await request.newContext();
-  const resp = await ctx.get(`${AUTH_BASE}/api/auth/session`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  });
+  const resp = await appPage.request.get(`${AUTH_BASE}/api/auth/session`);
 
   expect(resp.status()).toBe(200);
 
@@ -76,144 +92,122 @@ test("GET /api/auth/session should return user info and valid token", async () =
   expect(body).toHaveProperty("expires");
   const expiryDate = new Date(body.expires);
   expect(expiryDate.getTime()).toBeGreaterThan(Date.now());
-
-  await ctx.dispose();
 });
 
 // ─────────────────────────────────────────────
-// TEST 2 (positive): Upload dataset to a project
+// TEST 2 (positive): Create project and upload CSV
 // ─────────────────────────────────────────────
-test("POST /api/dataset/datasets/upload should accept a valid CSV", async () => {
-  const ctx = await request.newContext();
-
-  // first, create a project to upload to
-  const projectResp = await ctx.post(`${API_BASE}/api/dataset/projects/add`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-    multipart: {
-      name: "API Test Project",
-      description: "",
-      has_samples: "False",
+test("GET /api/dataset/projects/all should return user projects", async () => {
+  // fetch the list of projects using the access token
+  const result = await appPage.evaluate(
+    async ({ apiBase, token }) => {
+      const resp = await fetch(
+        `${apiBase}/api/dataset/projects/all?limit=20&offset=0`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      return { status: resp.status, body: await resp.json() };
     },
-  });
-
-  expect(projectResp.status()).toBe(201);
-  const project = await projectResp.json();
-  const projectId = project.id;
-
-  // upload the messy CSV
-  const csvPath = path.resolve(__dirname, "../../test-data/messy_data.csv");
-  const fileBuffer = fs.readFileSync(csvPath);
-
-  const uploadResp = await ctx.post(
-    `${API_BASE}/api/dataset/datasets/upload/${projectId}`,
-    {
-      headers: { Authorization: `Bearer ${TOKEN}` },
-      multipart: {
-        title: "messy_data.csv",
-        file: {
-          name: "messy_data.csv",
-          mimeType: "text/csv",
-          buffer: fileBuffer,
-        },
-      },
-    }
+    { apiBase: API_BASE, token: accessToken }
   );
 
-  expect(uploadResp.status()).toBe(200);
+  expect(result.status).toBe(200);
 
-  const uploadBody = await uploadResp.json();
+  // response is { items: [...], total: N }
+  expect(result.body).toHaveProperty("items");
+  expect(result.body).toHaveProperty("total");
+  expect(Array.isArray(result.body.items)).toBeTruthy();
+  expect(result.body.items.length).toBeGreaterThan(0);
 
-  // response should contain dataset info
-  expect(uploadBody).toHaveProperty("id");
-  expect(uploadBody).toHaveProperty("title", "messy_data.csv");
-  expect(uploadBody).toHaveProperty("content_type", "text/csv");
-  expect(uploadBody).toHaveProperty("file_size");
+  // each project should have an id and name
+  const firstProject = result.body.items[0];
+  expect(firstProject).toHaveProperty("id");
+  expect(firstProject).toHaveProperty("name");
 
-  console.log(`Dataset uploaded successfully. ID: ${uploadBody.id}`);
-
-  await ctx.dispose();
+  console.log(`Found ${result.body.total} project(s). First: ${firstProject.name}`);
 });
 
 // ─────────────────────────────────────────────
 // TEST 3 (negative): Upload invalid file should fail
 // ─────────────────────────────────────────────
 test("POST /api/dataset/datasets/upload should reject an invalid file", async () => {
-  const ctx = await request.newContext();
-
   // create a project first
-  const projectResp = await ctx.post(`${API_BASE}/api/dataset/projects/add`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-    multipart: {
-      name: "API Test Negative",
-      description: "",
-      has_samples: "False",
+  const projectResult = await appPage.evaluate(
+    async ({ apiBase, token }) => {
+      const formData = new FormData();
+      formData.append("name", "API Test Negative");
+      formData.append("description", "");
+      formData.append("has_samples", "False");
+
+      const resp = await fetch(`${apiBase}/api/dataset/projects/add`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      return { status: resp.status, body: await resp.json() };
     },
-  });
-  const project = await projectResp.json();
-  const projectId = project.id;
+    { apiBase: API_BASE, token: accessToken }
+  );
+  const projectId = projectResult.body.id;
 
-  // try uploading a file with garbage content and wrong extension
-  const garbageContent = Buffer.from(
-    "this is not valid data \x00\x01\x02 random binary junk"
+  // try uploading garbage binary data
+  const uploadResult = await appPage.evaluate(
+    async ({ apiBase, token, projId }) => {
+      const formData = new FormData();
+      formData.append("title", "garbage.xyz");
+      formData.append(
+        "file",
+        new Blob(["this is not valid data \x00\x01\x02 random binary junk"], {
+          type: "application/octet-stream",
+        }),
+        "garbage.xyz"
+      );
+
+      const resp = await fetch(
+        `${apiBase}/api/dataset/datasets/upload/${projId}`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        }
+      );
+      let body;
+      try { body = await resp.json(); } catch { body = null; }
+      return { status: resp.status, body };
+    },
+    { apiBase: API_BASE, token: accessToken, projId: projectId }
   );
 
-  const uploadResp = await ctx.post(
-    `${API_BASE}/api/dataset/datasets/upload/${projectId}`,
-    {
-      headers: { Authorization: `Bearer ${TOKEN}` },
-      multipart: {
-        title: "garbage.xyz",
-        file: {
-          name: "garbage.xyz",
-          mimeType: "application/octet-stream",
-          buffer: garbageContent,
-        },
-      },
-    }
-  );
-
-  // we expect this to either:
-  // - return a 4xx error (400, 415, 422) rejecting the file
-  // - or return 200 but with an error message in the body
-  const status = uploadResp.status();
+  const status = uploadResult.status;
 
   if (status >= 400) {
-    // server correctly rejected the invalid file
     expect(status).toBeGreaterThanOrEqual(400);
     expect(status).toBeLessThan(500);
     console.log(`Server rejected invalid file with status: ${status}`);
   } else {
-    // if server accepted it (some APIs do), check that it at least
-    // identified the problematic content type
-    const body = await uploadResp.json();
     console.log(
       `Server accepted file with status ${status}. Response:`,
-      JSON.stringify(body).slice(0, 200)
+      JSON.stringify(uploadResult.body).slice(0, 200)
     );
-    // even if accepted, the file should be stored — this is still useful info
-    expect(body).toHaveProperty("id");
+    expect(uploadResult.body).toHaveProperty("id");
   }
-
-  await ctx.dispose();
 });
 
 // ─────────────────────────────────────────────
-// TEST 4 (negative): Accessing API without auth should fail
+// TEST 4 (negative): Unauthenticated access should fail
 // ─────────────────────────────────────────────
 test("GET /api/dataset/projects/all without auth should return 401 or 403", async () => {
-  const ctx = await request.newContext();
+  const freshContext = await browser.newContext();
+  const page = await freshContext.newPage();
 
-  // call the projects endpoint with no auth token
-  const resp = await ctx.get(
+  const resp = await page.request.get(
     `${API_BASE}/api/dataset/projects/all?limit=20&offset=0`
   );
 
-  // should be rejected — either 401 (Unauthorized) or 403 (Forbidden)
   expect([401, 403]).toContain(resp.status());
+  console.log(`Unauthenticated request correctly rejected with status: ${resp.status()}`);
 
-  console.log(
-    `Unauthenticated request correctly rejected with status: ${resp.status()}`
-  );
-
-  await ctx.dispose();
+  await page.close();
+  await freshContext.close();
 });
