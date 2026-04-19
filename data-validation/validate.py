@@ -76,7 +76,7 @@ def validate_text_casing(output_df: pd.DataFrame) -> bool:
     """Check that all text columns are lowercased."""
     print("\n--- Validation 3: Text Casing (Lowercase) ---")
 
-    text_cols = output_df.select_dtypes(include=["object"]).columns.tolist()
+    text_cols = output_df.select_dtypes(include=["object", "str"]).columns.tolist()
     passed = True
 
     for col in text_cols:
@@ -116,7 +116,7 @@ def validate_data_integrity(input_df: pd.DataFrame, output_df: pd.DataFrame) -> 
 
     # normalize input for comparison — lowercase text columns
     input_normalized = input_df.copy()
-    for col in input_normalized.select_dtypes(include=["object"]).columns:
+    for col in input_normalized.select_dtypes(include=["object", "str"]).columns:
         input_normalized[col] = input_normalized[col].astype(str).str.lower().replace("nan", pd.NA)
 
     # check that output row count doesn't exceed input
