@@ -1,15 +1,10 @@
 """
 Data Validation Script for Rhombus AI
-======================================
-Compares the original messy CSV (input) with the cleaned CSV (output)
-to verify that data transformations were applied correctly.
 
-Validations performed:
-  1. Output schema correctness — same columns as input
-  2. Row count — output should have fewer rows (duplicates removed)
-  3. Text casing — all text columns should be lowercase
-  4. No exact duplicate rows in output
-  5. Data integrity — no data was invented or corrupted
+Compares the original messy CSV with the cleaned output to verify
+that the AI transformation actually worked correctly.
+
+Checks: schema, row count, text casing, duplicates, data integrity.
 
 Usage:
   python3 validate.py
@@ -23,7 +18,7 @@ import os
 
 
 def load_csv(filepath: str) -> pd.DataFrame:
-    """Load a CSV file and return a DataFrame."""
+    """Load a CSV file. Exits if file not found."""
     if not os.path.exists(filepath):
         print(f"FAIL: File not found: {filepath}")
         sys.exit(1)
@@ -31,7 +26,7 @@ def load_csv(filepath: str) -> pd.DataFrame:
 
 
 def validate_schema(input_df: pd.DataFrame, output_df: pd.DataFrame) -> bool:
-    """Check that the output has the same columns as the input."""
+    """The transformation should clean data, not add or remove columns."""
     print("\n--- Validation 1: Schema Correctness ---")
 
     input_cols = set(col.strip().lower() for col in input_df.columns)
@@ -51,7 +46,7 @@ def validate_schema(input_df: pd.DataFrame, output_df: pd.DataFrame) -> bool:
 
 
 def validate_row_count(input_df: pd.DataFrame, output_df: pd.DataFrame) -> bool:
-    """Check that duplicate removal reduced the row count."""
+    """We asked the AI to remove duplicates, so output should have fewer rows."""
     print("\n--- Validation 2: Row Count ---")
 
     input_rows = len(input_df)
@@ -66,14 +61,14 @@ def validate_row_count(input_df: pd.DataFrame, output_df: pd.DataFrame) -> bool:
         return True
     elif output_rows == input_rows:
         print("WARN: No rows were removed. Deduplication may not have worked.")
-        return True  # not strictly a failure -- depends on the transformation
+        return True
     else:
         print("FAIL: Output has MORE rows than input. Data may have been duplicated.")
         return False
 
 
 def validate_text_casing(output_df: pd.DataFrame) -> bool:
-    """Check that all text columns are lowercased."""
+    """We asked the AI to lowercase everything. Any uppercase = failure."""
     print("\n--- Validation 3: Text Casing (Lowercase) ---")
 
     text_cols = output_df.select_dtypes(include=["object", "str"]).columns.tolist()
@@ -95,7 +90,7 @@ def validate_text_casing(output_df: pd.DataFrame) -> bool:
 
 
 def validate_no_duplicates(output_df: pd.DataFrame) -> bool:
-    """Check that the output has no exact duplicate rows."""
+    """After dedup, there should be zero exact duplicate rows left."""
     print("\n--- Validation 4: No Duplicate Rows ---")
 
     dupes = output_df.duplicated()
@@ -111,17 +106,15 @@ def validate_no_duplicates(output_df: pd.DataFrame) -> bool:
 
 
 def validate_data_integrity(input_df: pd.DataFrame, output_df: pd.DataFrame) -> bool:
-    """Check that output data is a subset of input data (no invented rows)."""
+    """Output should be a subset of input. No rows should be invented."""
     print("\n--- Validation 5: Data Integrity ---")
 
-    # normalize input for comparison — lowercase text columns
     input_normalized = input_df.copy()
     for col in input_normalized.select_dtypes(include=["object", "str"]).columns:
         input_normalized[col] = input_normalized[col].astype(str).str.lower().replace("nan", pd.NA)
 
-    # check that output row count doesn't exceed input
     if len(output_df) > len(input_df):
-        print("FAIL: Output has more rows than input — data may have been invented")
+        print("FAIL: Output has more rows than input, data may have been invented")
         return False
 
     print(f"PASS: Output ({len(output_df)} rows) is smaller than or equal to input ({len(input_df)} rows)")
@@ -158,7 +151,6 @@ def main():
     results.append(("No Duplicates", validate_no_duplicates(output_df)))
     results.append(("Data Integrity", validate_data_integrity(input_df, output_df)))
 
-    # summary
     print("\n" + "=" * 55)
     print("  SUMMARY")
     print("=" * 55)
