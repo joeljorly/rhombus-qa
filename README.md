@@ -86,7 +86,12 @@ To run in debug mode (step through):
 npx playwright test --debug
 ```
 
-**What this tests:** The complete AI Pipeline Flow - sign in, upload a messy CSV, prompt the AI to clean the data, wait for the pipeline to execute, preview the transformed output, and download the results. The test verifies that the output contains valid data with lowercase text and fewer rows than the input (duplicates removed).
+**What this tests:**
+
+- **AI Pipeline Flow** - Sign in via Auth0, upload a messy CSV, prompt the AI to clean the data, handle clarification requests, wait for the pipeline to build and execute, preview the transformed output, download the results, and validate the downloaded content (schema, casing, deduplication).
+- **Invalid Login** - Attempts login with wrong credentials and verifies an error message is shown.
+- **Logout Flow** - Logs in, then logs out, and verifies the user is returned to a logged-out state.
+- **Project Navigation** - Navigates to an existing project and verifies the pipeline canvas loads with its controls.
 
 ### Part 2 - API / Network-Level Tests
 
@@ -97,10 +102,11 @@ npx playwright test
 
 **What this tests:**
 
-1. **Session authentication** - Verifies that a logged-in session returns valid user information and a JWT access token
-2. **Dataset upload (positive)** - Confirms that a valid CSV file can be uploaded to a project and returns correct metadata
-3. **Invalid file upload (negative)** - Attempts to upload garbage binary data and verifies the server handles it appropriately
-4. **Unauthenticated access (negative)** - Confirms that API endpoints reject requests without authentication
+1. **Session authentication (positive)** - Verifies the session endpoint returns valid user info, a JWT access token, and a future expiry date
+2. **Project listing (positive)** - Confirms the projects endpoint returns a paginated list of user projects when authenticated
+3. **Invalid file upload (negative)** - Uploads garbage binary data and verifies the server rejects it
+4. **Unauthenticated access (negative)** - Calls the API with no credentials and confirms it returns 401
+5. **Download endpoint (positive)** - Finds a project with pipeline output, downloads it via the API, and verifies the response is valid CSV
 
 ### Part 3 - Data Validation
 
@@ -138,18 +144,19 @@ The AI pipeline is prompted to remove duplicates and standardize text to lowerca
 
 ## Design Decisions
 
-- **Playwright over Cypress**: Playwright has built-in support for API testing via `request` contexts, which allowed me to use one tool for both UI and API tests. Its auto-wait mechanism also helps handle the async pipeline execution without fragile timeouts.
-- **Option A (AI Pipeline Flow)**: Chosen because it tests the core AI-driven feature of the product. While manual transformations are more deterministic, the AI pipeline is the primary user journey and the higher-risk flow to validate.
-- **Environment variables for credentials**: Credentials are stored in `.env` (git-ignored) rather than hardcoded, following security best practices.
-- **Flexible assertions in API tests**: The negative upload test handles both rejection (4xx) and acceptance scenarios gracefully, since the server's behavior for edge cases may vary.
-- **Data validation as a standalone script**: Written in Python with pandas for clear, readable validation logic that can be run independently of the test framework.
+- **Playwright over Cypress**: Playwright supports both UI and API testing in one framework. Its auto-wait mechanism handles async pipeline execution without fragile timeouts or blind sleeps.
+- **Option A (AI Pipeline Flow)**: The AI pipeline is the core user journey and the highest-risk flow. If this breaks, users can't do anything meaningful with the product.
+- **Role-based selectors**: More stable than CSS selectors. They survive UI redesigns as long as the semantic structure stays the same.
+- **Environment variables for credentials**: Stored in `.env` (git-ignored) so secrets never touch the codebase or Git history.
+- **Flexible assertions in API tests**: The negative upload test handles different server responses gracefully, since behavior for edge cases can vary between environments.
+- **Data validation as a standalone script**: Written in Python with pandas for clear, readable validation logic that can run independently of the test framework.
+
+## Known Limitations and Future Improvements
+
+- The AI pipeline output is non-deterministic since it uses an LLM, so assertions focus on structural correctness rather than exact output matching.
+- Pipeline execution can take 30-60 seconds depending on server load.
+- Future improvements could include testing with multiple CSV formats, adding retry logic for flaky pipeline builds, and CI/CD integration via GitHub Actions.
 
 ## Demo Video
 
-[Demo video link](TODO_ADD_LINK_HERE)
-
-## Notes
-
-- Tests run against the live production Rhombus AI application
-- The AI pipeline behavior may vary slightly between runs since it uses an LLM, so assertions focus on structural correctness rather than exact output matching
-- Pipeline execution can take 30-60 seconds depending on server load
+[Demo video walkthrough](https://youtu.be/1EuxVxXx7Sw)
